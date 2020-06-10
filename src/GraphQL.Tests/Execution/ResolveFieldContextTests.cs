@@ -1,10 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
+using GraphQL.SystemTextJson;
 using GraphQL.Types;
 using Shouldly;
 using Xunit;
-using System.Threading.Tasks;
 
 namespace GraphQL.Tests.Execution
 {
@@ -14,9 +15,12 @@ namespace GraphQL.Tests.Execution
 
         public ResolveFieldContextTests()
         {
-            _context = new ResolveFieldContext();
-            _context.Arguments = new Dictionary<string, object>();
-            _context.Errors = new ExecutionErrors();
+            _context = new ResolveFieldContext
+            {
+                Arguments = new Dictionary<string, object>(),
+                Errors = new ExecutionErrors(),
+                Extensions = new Dictionary<string, object>(),
+            };
         }
 
         [Fact]
@@ -42,7 +46,7 @@ namespace GraphQL.Tests.Execution
         {
             long val = 89429901947254093;
             _context.Arguments["a"] = val;
-            Assert.Throws<OverflowException>(() => _context.GetArgument<int>("a"));
+            Should.Throw<OverflowException>(() => _context.GetArgument<int>("a"));
         }
 
         [Fact]
@@ -95,13 +99,13 @@ namespace GraphQL.Tests.Execution
         [Fact]
         public void argument_returns_provided_default_when_missing()
         {
-            _context.GetArgument<string>("wat", "foo").ShouldBe("foo");
+            _context.GetArgument("wat", "foo").ShouldBe("foo");
         }
 
         [Fact]
         public void argument_returns_list_from_array()
         {
-            _context.Arguments = "{a: ['one', 'two']}".ToInputs();
+            _context.Arguments = @"{ ""a"": [""one"", ""two""]}".ToInputs();
             var result = _context.GetArgument<List<string>>("a");
             result.ShouldNotBeNull();
             result.Count.ShouldBe(2);
@@ -169,7 +173,7 @@ namespace GraphQL.Tests.Execution
             var exception = new Exception("Test");
             var result = await _context.TryAsyncResolve<int>(
                 c => throw exception);
-            result.ShouldBe(default(int));
+            result.ShouldBe(default);
             _context.Errors.First().InnerException.ShouldBe(exception);
         }
 
@@ -177,7 +181,7 @@ namespace GraphQL.Tests.Execution
         [InlineData(123)]
         public async Task try_resolve_generic_async_invokes_error_handler(int value)
         {
-            var result = await _context.TryAsyncResolve<int>(
+            var result = await _context.TryAsyncResolve(
                 c => throw new InvalidOperationException(),
                 e => {
                     e.Add(new ExecutionError("Test Error"));
@@ -197,7 +201,83 @@ namespace GraphQL.Tests.Execution
             result.ShouldBe("Test Result");
         }
 
-        enum SomeEnum
+        [Fact]
+        public void resolveFieldContextAdapter_throws_error_when_null()
+        {
+            Should.Throw<ArgumentNullException>(() =>
+            {
+                var adapter = new ResolveFieldContextAdapter<object>(null);
+            });
+        }
+
+        [Fact]
+        public void resolveFieldContextAdapter_throws_error_if_invalid_type()
+        {
+            var context = new ResolveFieldContext() { Source = "test" };
+            Should.Throw<ArgumentException>(() =>
+            {
+                var adapter = new ResolveFieldContextAdapter<int>(context);
+            });
+        }
+
+        [Fact]
+        public void resolveFieldContextAdapter_accepts_null_sources_ref()
+        {
+            var context = new ResolveFieldContext();
+            var adapter = new ResolveFieldContextAdapter<string>(context);
+            adapter.Source.ShouldBe(null);
+        }
+
+        [Fact]
+        public void resolveFieldContextAdapter_accepts_null_sources_nullable()
+        {
+            var context = new ResolveFieldContext();
+            var adapter = new ResolveFieldContextAdapter<int?>(context);
+            adapter.Source.ShouldBe(null);
+        }
+
+        [Fact]
+        public void resolveFieldContextAdapter_throws_error_for_null_values()
+        {
+            var context = new ResolveFieldContext();
+            Should.Throw<ArgumentException>(() =>
+            {
+                var adapter = new ResolveFieldContextAdapter<int>(context);
+            });
+        }
+
+        [Fact]
+        public void GetSetExtension_Should_Throw_On_Null()
+        {
+            IResolveFieldContext context = null;
+            Should.Throw<ArgumentNullException>(() => context.GetExtension("e"));
+            Should.Throw<ArgumentNullException>(() => context.SetExtension("e", 1));
+
+            context = new ResolveFieldContext();
+            context.GetExtension("a").ShouldBe(null);
+            context.GetExtension("a.b.c.d").ShouldBe(null);
+            Should.Throw<ArgumentException>(() => context.SetExtension("e", 1));
+        }
+
+        [Fact]
+        public void GetSetExtension_Should_Get_And_Set_Values()
+        {
+            _context.GetExtension("a").ShouldBe(null);
+            _context.GetExtension("a.b.c.d").ShouldBe(null);
+
+            _context.SetExtension("a", 5);
+            _context.GetExtension("a").ShouldBe(5);
+
+            _context.SetExtension("a.b.c.d", "value");
+            _context.GetExtension("a.b.c.d").ShouldBe("value");
+            var d = _context.GetExtension("a.b").ShouldBeOfType<Dictionary<string, object>>();
+            d.Count.ShouldBe(1);
+
+            _context.SetExtension("a.b.c", "override");
+            _context.GetExtension("a.b.c.d").ShouldBe(null);
+        }
+
+        private enum SomeEnum
         {
             One,
             Two

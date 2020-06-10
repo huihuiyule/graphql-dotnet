@@ -1,11 +1,12 @@
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using GraphQL.Language.AST;
 using GraphQLParser;
 using GraphQLParser.AST;
 using OperationTypeParser = GraphQLParser.AST.OperationType;
 using OperationType = GraphQL.Language.AST.OperationType;
+using System.Numerics;
+using System;
 
 namespace GraphQL.Language
 {
@@ -13,7 +14,7 @@ namespace GraphQL.Language
     {
         private readonly ISource _body;
 
-        private CoreToVanillaConverter(string body)
+        internal CoreToVanillaConverter(string body)
         {
             _body = new Source(body);
         }
@@ -46,6 +47,7 @@ namespace GraphQL.Language
         {
             var name = source.Name != null ? Name(source.Name) : null;
             var op = new Operation(name).WithLocation(source, _body);
+            op.CommentNode = Comment(source.Comment);
             op.OperationType = ToOperationType(source.Operation);
             op.SelectionSet = SelectionSet(source.SelectionSet);
             op.Variables = VariableDefinitions(source.VariableDefinitions);
@@ -56,6 +58,7 @@ namespace GraphQL.Language
         public FragmentDefinition Fragment(GraphQLFragmentDefinition source)
         {
             var frag = new FragmentDefinition(Name(source.Name)).WithLocation(source, _body);
+            frag.CommentNode = Comment(source.Comment);
             frag.Type = NamedType(source.TypeCondition);
             frag.SelectionSet = SelectionSet(source.SelectionSet);
             frag.Directives = Directives(source.Directives);
@@ -66,6 +69,7 @@ namespace GraphQL.Language
         {
             var name = source.Name != null ? Name(source.Name) : null;
             var spread = new FragmentSpread(name).WithLocation(source, _body);
+            spread.CommentNode = Comment(source.Comment);
             spread.Directives = Directives(source.Directives);
             return spread;
         }
@@ -73,6 +77,7 @@ namespace GraphQL.Language
         public InlineFragment InlineFragment(GraphQLInlineFragment source)
         {
             var frag = new InlineFragment().WithLocation(source, _body);
+            frag.CommentNode = Comment(source.Comment);
             frag.Type = source.TypeCondition != null ? NamedType(source.TypeCondition) : null;
             frag.Directives = Directives(source.Directives);
             frag.SelectionSet = SelectionSet(source.SelectionSet);
@@ -81,21 +86,23 @@ namespace GraphQL.Language
 
         public VariableDefinitions VariableDefinitions(IEnumerable<GraphQLVariableDefinition> source)
         {
-            var defs = new VariableDefinitions();
+            VariableDefinitions defs = null;
 
             if (source != null)
             {
                 foreach (var def in source.Select(VariableDefinition))
                 {
-                    defs.Add(def);
+                    (defs ?? (defs = new VariableDefinitions())).Add(def);
                 }
             }
+
             return defs;
         }
 
         public VariableDefinition VariableDefinition(GraphQLVariableDefinition source)
         {
             var def = new VariableDefinition(Name(source.Variable.Name)).WithLocation(source, _body);
+            def.CommentNode = Comment(source.Comment);
             def.Type = Type(source.Type);
             if (source.DefaultValue is GraphQLValue val)
             {
@@ -124,63 +131,60 @@ namespace GraphQL.Language
             return set;
         }
 
-        public ISelection Selection(ASTNode source)
+        public ISelection Selection(ASTNode source) => source.Kind switch
         {
-            switch (source.Kind)
-            {
-                case ASTNodeKind.Field:
-                {
-                    return Field((GraphQLFieldSelection) source);
-                }
-                case ASTNodeKind.FragmentSpread:
-                {
-                    return FragmentSpread((GraphQLFragmentSpread) source);
-                }
-                case ASTNodeKind.InlineFragment:
-                {
-                    return InlineFragment((GraphQLInlineFragment) source);
-                }
-            }
-
-            throw new ExecutionError($"Unmapped selection {source.Kind}");
-        }
+            ASTNodeKind.Field => Field((GraphQLFieldSelection)source),
+            ASTNodeKind.FragmentSpread => FragmentSpread((GraphQLFragmentSpread)source),
+            ASTNodeKind.InlineFragment => InlineFragment((GraphQLInlineFragment)source),
+            _ => throw new ExecutionError($"Unmapped selection {source.Kind}")
+        };
 
         public Field Field(GraphQLFieldSelection source)
         {
             var alias = source.Alias != null ? Name(source.Alias) : null;
             var field = new Field(alias, Name(source.Name)).WithLocation(source, _body);
+            field.CommentNode = Comment(source.Comment);
             field.Arguments = Arguments(source.Arguments);
             field.Directives = Directives(source.Directives);
             field.SelectionSet = SelectionSet(source.SelectionSet);
             return field;
         }
 
-        public Directives Directives(IEnumerable<GraphQLDirective> directives)
+        public Directives Directives(IEnumerable<GraphQLDirective> source)
         {
-            var target = new Directives();
+            Directives target = null;
 
-            if (directives != null)
+            if (source != null)
             {
-                foreach (var d in directives)
+                foreach (var d in source)
                 {
-                    var dir = new Directive(Name(d.Name)).WithLocation(d, _body);
-                    dir.Arguments = Arguments(d.Arguments);
-                    target.Add(dir);
+                    (target ?? (target = new Directives())).Add(Directive(d));
                 }
             }
 
             return target;
         }
 
+        public Directive Directive(GraphQLDirective d)
+        {
+            var dir = new Directive(Name(d.Name)).WithLocation(d, _body);
+            dir.Arguments = Arguments(d.Arguments);
+            return dir;
+        }
+
         public Arguments Arguments(IEnumerable<GraphQLArgument> source)
         {
-            var target = new Arguments();
+            Arguments target = null;
 
-            foreach (var s in source)
+            if (source != null)
             {
-                var arg = new Argument(Name(s.Name)).WithLocation(s.Name, _body);
-                arg.Value = Value(s.Value);
-                target.Add(arg);
+                foreach (var a in source)
+                {
+                    var arg = new Argument(Name(a.Name)).WithLocation(a.Name, _body);
+                    arg.CommentNode = Comment(a.Comment);
+                    arg.Value = Value(a.Value);
+                    (target ?? (target = new Arguments())).Add(arg);
+                }
             }
 
             return target;
@@ -192,72 +196,73 @@ namespace GraphQL.Language
             {
                 case ASTNodeKind.StringValue:
                 {
-                    var str = source as GraphQLScalarValue;
-                    Debug.Assert(str != null, nameof(str) + " != null");
-
+                    var str = (GraphQLScalarValue)source;
                     return new StringValue(str.Value).WithLocation(str, _body);
                 }
                 case ASTNodeKind.IntValue:
                 {
-                    var str = source as GraphQLScalarValue;
-                    Debug.Assert(str != null, nameof(str) + " != null");
+                    var str = (GraphQLScalarValue)source;
 
                     if (int.TryParse(str.Value, out var intResult))
                     {
-                        var val = new IntValue(intResult).WithLocation(str, _body);
-                        return val;
+                        return new IntValue(intResult).WithLocation(str, _body);
                     }
 
                     // If the value doesn't fit in an integer, revert to using long...
                     if (long.TryParse(str.Value, out var longResult))
                     {
-                        var val = new LongValue(longResult).WithLocation(str, _body);
-                        return val;
+                        return new LongValue(longResult).WithLocation(str, _body);
+                    }
+
+                    // If the value doesn't fit in an long, revert to using decimal...
+                    if (decimal.TryParse(str.Value, out var decimalResult))
+                    {
+                        return new DecimalValue(decimalResult).WithLocation(str, _body);
+                    }
+
+                    // If the value doesn't fit in an decimal, revert to using BigInteger...
+                    if (BigInteger.TryParse(str.Value, out var bigIntegerResult))
+                    {
+                        return new BigIntValue(bigIntegerResult).WithLocation(str, _body);
                     }
 
                     throw new ExecutionError($"Invalid number {str.Value}");
                 }
                 case ASTNodeKind.FloatValue:
                 {
-                    var str = source as GraphQLScalarValue;
-                    Debug.Assert(str != null, nameof(str) + " != null");
+                    var str = (GraphQLScalarValue)source;
                     return new FloatValue(ValueConverter.ConvertTo<double>(str.Value)).WithLocation(str, _body);
                 }
                 case ASTNodeKind.BooleanValue:
                 {
-                    var str = source as GraphQLScalarValue;
-                    Debug.Assert(str != null, nameof(str) + " != null");
+                    var str = (GraphQLScalarValue)source;
                     return new BooleanValue(ValueConverter.ConvertTo<bool>(str.Value)).WithLocation(str, _body);
                 }
                 case ASTNodeKind.EnumValue:
                 {
-                    var str = source as GraphQLScalarValue;
-                    Debug.Assert(str != null, nameof(str) + " != null");
+                    var str = (GraphQLScalarValue)source;
                     return new EnumValue(str.Value).WithLocation(str, _body);
                 }
                 case ASTNodeKind.Variable:
                 {
-                    var vari = source as GraphQLVariable;
-                    Debug.Assert(vari != null, nameof(vari) + " != null");
+                    var vari = (GraphQLVariable)source;
                     return new VariableReference(Name(vari.Name)).WithLocation(vari, _body);
                 }
                 case ASTNodeKind.ObjectValue:
                 {
-                    var obj = source as GraphQLObjectValue;
-                    Debug.Assert(obj != null, nameof(obj) + " != null");
+                    var obj = (GraphQLObjectValue)source;
                     var fields = obj.Fields.Select(ObjectField);
                     return new ObjectValue(fields).WithLocation(obj, _body);
                 }
                 case ASTNodeKind.ListValue:
                 {
-                    var list = source as GraphQLListValue;
-                    Debug.Assert(list != null, nameof(list) + " != null");
-                    var values = list.Values.Select(Value);
+                    var list = (GraphQLListValue)source;
+                    var values = list.Values?.Select(Value);
                     return new ListValue(values).WithLocation(list, _body);
                 }
                 case ASTNodeKind.NullValue:
                 {
-                    var str = source as GraphQLScalarValue;
+                    var str = (GraphQLScalarValue)source;
                     return new NullValue().WithLocation(str, _body);
                 }
             }
@@ -267,14 +272,12 @@ namespace GraphQL.Language
 
         public ObjectField ObjectField(GraphQLObjectField source)
         {
-            var field = new ObjectField(Name(source.Name), Value(source.Value)).WithLocation(source, _body);
-            return field;
+            return new ObjectField(Name(source.Name), Value(source.Value)).WithLocation(source, _body);
         }
 
         public NamedType NamedType(GraphQLNamedType source)
         {
-            var type = new NamedType(Name(source.Name)).WithLocation(source, _body);
-            return type;
+            return new NamedType(Name(source.Name)).WithLocation(source, _body);
         }
 
         public IType Type(GraphQLType type)
@@ -283,19 +286,19 @@ namespace GraphQL.Language
             {
                 case ASTNodeKind.NamedType:
                 {
-                    var name = (GraphQLNamedType) type;
+                    var name = (GraphQLNamedType)type;
                     return new NamedType(Name(name.Name)).WithLocation(name, _body);
                 }
 
                 case ASTNodeKind.NonNullType:
                 {
-                    var nonNull = (GraphQLNonNullType) type;
+                    var nonNull = (GraphQLNonNullType)type;
                     return new NonNullType(Type(nonNull.Type)).WithLocation(nonNull, _body);
                 }
 
                 case ASTNodeKind.ListType:
                 {
-                    var list = (GraphQLListType) type;
+                    var list = (GraphQLListType)type;
                     return new ListType(Type(list.Type)).WithLocation(list, _body);
                 }
             }
@@ -308,22 +311,21 @@ namespace GraphQL.Language
             return new NameNode(name.Value).WithLocation(name, _body);
         }
 
-        public static OperationType ToOperationType(OperationTypeParser type)
+        private CommentNode Comment(GraphQLComment comment)
         {
-            switch (type)
-            {
-                case OperationTypeParser.Query:
-                    return OperationType.Query;
+            if (comment == null)
+                return null;
 
-                case OperationTypeParser.Mutation:
-                    return OperationType.Mutation;
-
-                case OperationTypeParser.Subscription:
-                    return OperationType.Subscription;
-            }
-
-            throw new ExecutionError($"Unmapped operation type {type}");
+            return new CommentNode(comment.Text).WithLocation(comment, _body);
         }
+
+        public static OperationType ToOperationType(OperationTypeParser type) => type switch
+        {
+            OperationTypeParser.Query => OperationType.Query,
+            OperationTypeParser.Mutation => OperationType.Mutation,
+            OperationTypeParser.Subscription => OperationType.Subscription,
+            _ => throw new ExecutionError($"Unmapped operation type {type}")
+        };
     }
 
     public static class AstNodeExtensions

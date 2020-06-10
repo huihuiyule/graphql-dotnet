@@ -28,28 +28,33 @@ namespace GraphQL.Instrumentation
             PerfRecord[] perf,
             DateTime start)
         {
-            var operationStat = perf.Single(x => x.Category == "operation");
-            var documentStats = perf.Where(x => x.Category == "document");
-            var fieldStats = perf.Where(x => x.Category == "field");
-
+            var operationStat = perf.Single(x => x.Category == "operation"); // always exists
             var trace = new ApolloTrace(start, operationStat.Duration);
 
-            var parsingStat = documentStats.Single(x => x.Subject == "Building document");
-            trace.Parsing.StartOffset = ApolloTrace.ConvertTime(parsingStat.Start);
-            trace.Parsing.Duration = ApolloTrace.ConvertTime(parsingStat.Duration);
+            var documentStats = perf.Where(x => x.Category == "document");
 
-            var validationStat = documentStats.Single(x => x.Subject == "Validating document");
-            trace.Validation.StartOffset = ApolloTrace.ConvertTime(parsingStat.Start);
-            trace.Validation.Duration = ApolloTrace.ConvertTime(parsingStat.Duration);
+            var parsingStat = documentStats.FirstOrDefault(x => x.Subject == "Building document");
+            if (parsingStat != null) // can be null if exception occured
+            {
+                trace.Parsing.StartOffset = ApolloTrace.ConvertTime(parsingStat.Start);
+                trace.Parsing.Duration = ApolloTrace.ConvertTime(parsingStat.Duration);
+            }
 
+            var validationStat = documentStats.FirstOrDefault(x => x.Subject == "Validating document");
+            if (validationStat != null) // can be null if exception occured
+            {
+                trace.Validation.StartOffset = ApolloTrace.ConvertTime(validationStat.Start);
+                trace.Validation.Duration = ApolloTrace.ConvertTime(validationStat.Duration);
+            }
+
+            var fieldStats = perf.Where(x => x.Category == "field");
             foreach (var fieldStat in fieldStats)
             {
-                var stringPath = fieldStat.MetaField<IEnumerable<string>>("path");
                 trace.Execution.Resolvers.Add(
                     new ApolloTrace.ResolverTrace
                     {
                         FieldName = fieldStat.MetaField<string>("fieldName"),
-                        Path = ConvertPath(stringPath).ToList(),
+                        Path = fieldStat.MetaField<IEnumerable<object>>("path").ToList(),
                         ParentType = fieldStat.MetaField<string>("typeName"),
                         ReturnType = fieldStat.MetaField<string>("returnTypeName"),
                         StartOffset = ApolloTrace.ConvertTime(fieldStat.Start),
@@ -58,21 +63,6 @@ namespace GraphQL.Instrumentation
             }
 
             return trace;
-        }
-
-        private static IEnumerable<object> ConvertPath(IEnumerable<string> stringPath)
-        {
-            foreach (var step in stringPath)
-            {
-                if (int.TryParse(step, out var arrayIndex))
-                {
-                    yield return arrayIndex;
-                }
-                else
-                {
-                    yield return step;
-                }
-            }
         }
     }
 }

@@ -1,11 +1,14 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace GraphQL.Language.AST
 {
     public abstract class AbstractNode : INode
     {
-        public virtual IEnumerable<INode> Children => Enumerable.Empty<INode>();
+        public string Comment => CommentNode?.Value;
+        public CommentNode CommentNode { get; set; }
+
+        public virtual IEnumerable<INode> Children => null;
 
         public SourceLocation SourceLocation { get; set; }
 

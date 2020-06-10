@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Linq;
 using Bogus;
 
 namespace GraphQL.DataLoader.Tests.Models
@@ -28,7 +27,7 @@ namespace GraphQL.DataLoader.Tests.Models
 
             Orders = new Faker<Order>()
                 .RuleFor(x => x.OrderId, _ => ++orderId)
-                .RuleFor(x => x.OrderedOn, f => f.Date.Recent(7))
+                .RuleFor(x => x.OrderedOn, f => f.Date.Recent(7).Date)
                 .RuleFor(x => x.UserId, f => (userId > 0) ? f.Random.Number(1, userId) : 0);
 
             OrderItems = new Faker<OrderItem>()
